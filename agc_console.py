@@ -4,9 +4,11 @@ Reimagines Margaret Hamilton's fault-tolerant executive: prioritization, overloa
 No external dependencies. Run with: python3 agc_console.py
 """
 
-import tkinter as tk
+import os
 import random
 import time
+import tkinter as tk
+from tkinter import TclError
 
 class AGCSystem:
     def __init__(self):
@@ -21,6 +23,13 @@ class AGCSystem:
         self.overload_count = 0
         self.cycle = 0
         self.running = False
+
+    def advance_cycle(self):
+        """Advance the simulation by one scheduling cycle."""
+        self.cycle += 1
+        load = self.check_system_load()
+        state = self.recover_and_prioritize()
+        return load, state
 
     def simulate_sensor_load(self):
         # Random load spikes emulate radar + guidance contention
@@ -63,6 +72,8 @@ class AGCMissionConsole(tk.Tk):
         self.agc = agc
         self.refresh_ms = refresh_ms
         self.last_blink_state = False
+        self.state = "INIT"
+        self.load = 0.0
         self._build_ui()
         self._update_ui(initial=True)
 
@@ -154,9 +165,7 @@ class AGCMissionConsole(tk.Tk):
         self.after(self.refresh_ms, self._tick)
 
     def _update_logic(self):
-        self.agc.cycle += 1
-        self.load = self.agc.check_system_load()
-        self.state = self.agc.recover_and_prioritize()
+        self.load, self.state = self.agc.advance_cycle()
 
     def _update_ui(self, initial=False):
         # Cycle & state
@@ -189,9 +198,34 @@ class AGCMissionConsole(tk.Tk):
         if initial:
             self.update_idletasks()
 
+def run_cli_console(agc: AGCSystem, delay=0.7):
+    print("Running AGC console in text mode (no GUI display detected).")
+    print("Press Ctrl+C to stop.\n")
+    agc.running = True
+    try:
+        while True:
+            load, state = agc.advance_cycle()
+            clamped = max(0.0, min(load, 2.0))
+            bar = int(clamped * 20)
+            status_line = f"Cycle {agc.cycle:03d} | Load: {load:4.1f}x [{'#' * bar:<20}] {state}"
+            print(status_line)
+            for name, info in sorted(agc.tasks.items(), key=lambda item: item[1]["priority"]):
+                stat = "ACTIVE" if info["active"] else "SUSPENDED"
+                print(f"  - {name:<18} {stat}")
+            print()
+            time.sleep(delay)
+    except KeyboardInterrupt:
+        print("\nSimulation stopped.")
+
 def main():
     agc = AGCSystem()
-    app = AGCMissionConsole(agc, refresh_ms=700)
+    try:
+        app = AGCMissionConsole(agc, refresh_ms=700)
+    except TclError as exc:
+        if not os.environ.get("DISPLAY"):
+            run_cli_console(agc)
+            return
+        raise exc
     # Autostart for convenience
     app.start()
     app.mainloop()
